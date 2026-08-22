@@ -30,53 +30,44 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
+          import re
 
           server = Path('src/server.ts')
           source = server.read_text()
-          old = '''        file: z
-            .object({
-              download_url: z.string().describe("Temporary HTTPS download URL provided by ChatGPT."),
-              file_id: z.string().describe("ChatGPT file id for this attachment."),
-              mime_type: z.string().optional().describe("Optional MIME type declared by ChatGPT."),
-              file_name: z.string().optional().describe("Optional original file name declared by ChatGPT.")
-            })
-            .describe("ChatGPT Apps SDK file reference from openai/fileParams."),'''
-          new = '''        file: z.any().describe(
+          pattern = re.compile(
+              r'''file:\s*z\s*\.object\(\{\s*download_url:\s*z\.string\(\)\.describe\("Temporary HTTPS download URL provided by ChatGPT\."\),\s*file_id:\s*z\.string\(\)\.describe\("ChatGPT file id for this attachment\."\),\s*mime_type:\s*z\.string\(\)\.optional\(\)\.describe\("Optional MIME type declared by ChatGPT\."\),\s*file_name:\s*z\.string\(\)\.optional\(\)\.describe\("Optional original file name declared by ChatGPT\."\)\s*\}\)\s*\.describe\("ChatGPT Apps SDK file reference from openai/fileParams\."\),''',
+              re.MULTILINE,
+          )
+          replacement = '''file: z.any().describe(
             "ChatGPT Apps SDK file reference supplied via openai/fileParams. The ChatGPT host hydrates this field to an object containing download_url and file_id before the tool call reaches CodexPro."
           ),'''
-          if old not in source:
-              raise SystemExit('import_file schema snippet not found')
-          server.write_text(source.replace(old, new))
+          source, count = pattern.subn(replacement, source, count=1)
+          if count != 1:
+              raise SystemExit(f'import_file schema replacement count={count}, expected 1')
+          server.write_text(source)
 
           smoke = Path('scripts/import-smoke.mjs')
           source = smoke.read_text()
-          old = '''      const fileParams = importTool._meta?.['openai/fileParams'] ?? importTool.annotations?._meta?.['openai/fileParams'];
-          const metaFileParams = importTool._meta?.['openai/fileParams'];
-          // MCP SDK may nest meta differently; accept descriptor presence via tools/list raw shape.
-          const listedMeta = importTool._meta || {};
-          if (!Array.isArray(listedMeta['openai/fileParams']) || !listedMeta['openai/fileParams'].includes('file')) {
-            // Some SDK versions expose _meta only after unwrap; still require the tool schema file object.
-            const props = importTool.inputSchema?.properties?.file?.properties;
-            if (!props?.download_url || !props?.file_id) {
-              throw new Error(`import_file missing fileParams/schema: ${JSON.stringify(importTool)}`);
-            }
-          }'''
-          new = '''      const listedMeta = importTool._meta || {};
-          if (!Array.isArray(listedMeta['openai/fileParams']) || !listedMeta['openai/fileParams'].includes('file')) {
-            throw new Error(`import_file missing openai/fileParams metadata: ${JSON.stringify(importTool)}`);
-          }
-          const fileSchema = importTool.inputSchema?.properties?.file;
-          if (!fileSchema) {
-            throw new Error(`import_file missing file schema: ${JSON.stringify(importTool)}`);
-          }
-          // Apps SDK file params are host-hydrated. Keep this schema permissive so ChatGPT
-          // can substitute the platform file object instead of coercing it to a string.
-          if (fileSchema.type === 'string') {
-            throw new Error(`import_file file schema must not be string: ${JSON.stringify(fileSchema)}`);
-          }'''
-          if old not in source:
-              raise SystemExit('import smoke descriptor snippet not found')
-          smoke.write_text(source.replace(old, new))
+          start = source.find("      const fileParams = importTool._meta?.['openai/fileParams']")
+          end_marker = "          }\n        }"
+          if start < 0:
+              raise SystemExit('import smoke descriptor start not found')
+          end = source.find(end_marker, start)
+          if end < 0:
+              raise SystemExit('import smoke descriptor end not found')
+          end += len(end_marker)
+          replacement = '''      const listedMeta = importTool._meta || {};
+      if (!Array.isArray(listedMeta['openai/fileParams']) || !listedMeta['openai/fileParams'].includes('file')) {
+        throw new Error(`import_file missing openai/fileParams metadata: ${JSON.stringify(importTool)}`);
+      }
+      const fileSchema = importTool.inputSchema?.properties?.file;
+      if (!fileSchema) {
+        throw new Error(`import_file missing file schema: ${JSON.stringify(importTool)}`);
+      }
+      if (fileSchema.type === 'string') {
+        throw new Error(`import_file file schema must not be string: ${JSON.stringify(fileSchema)}`);
+      }'''
+          smoke.write_text(source[:start] + replacement + source[end:])
 
       - run: npm ci
       - run: npm run build
