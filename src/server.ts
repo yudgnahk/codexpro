@@ -1968,12 +1968,15 @@ export function createCodexProServer(config: CodexProConfig): McpServer {
         workspace_id: z.string().optional().describe("Workspace id from open_workspace. Omit to use the workspace selected for this MCP session."),
         file: z
           .object({
-            download_url: z.string().describe("Temporary HTTPS download URL provided by ChatGPT."),
-            file_id: z.string().describe("ChatGPT file id for this attachment."),
-            mime_type: z.string().optional().describe("Optional MIME type declared by ChatGPT."),
-            file_name: z.string().optional().describe("Optional original file name declared by ChatGPT.")
+            download_url: z.string().optional(),
+            file_id: z.string().optional(),
+            mime_type: z.string().optional(),
+            file_name: z.string().optional()
           })
-          .describe("ChatGPT Apps SDK file reference from openai/fileParams."),
+          .passthrough()
+          .describe(
+            "ChatGPT Apps SDK file reference supplied via openai/fileParams. The ChatGPT host hydrates this field before the tool call reaches CodexPro. Backend validation still requires download_url and file_id."
+          ),
         destination: z.string().describe("Destination path relative to the workspace root."),
         overwrite: z.boolean().optional().describe("Replace an existing destination file. Default: false."),
         expected_sha256: z.string().regex(/^[a-f0-9]{64}$/i).optional().describe("Optional SHA-256 of the attachment bytes. Import fails on mismatch.")
