@@ -1,0 +1,90 @@
+name: Apply Apps SDK file param fix
+
+on:
+  push:
+    branches:
+      - fix/apps-sdk-file-param
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/apps-sdk-file-param
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Patch import_file descriptor and smoke coverage
+        shell: python
+        run: |
+          from pathlib import Path
+
+          server = Path('src/server.ts')
+          source = server.read_text()
+          old = '''        file: z
+            .object({
+              download_url: z.string().describe("Temporary HTTPS download URL provided by ChatGPT."),
+              file_id: z.string().describe("ChatGPT file id for this attachment."),
+              mime_type: z.string().optional().describe("Optional MIME type declared by ChatGPT."),
+              file_name: z.string().optional().describe("Optional original file name declared by ChatGPT.")
+            })
+            .describe("ChatGPT Apps SDK file reference from openai/fileParams."),'''
+          new = '''        file: z.any().describe(
+            "ChatGPT Apps SDK file reference supplied via openai/fileParams. The ChatGPT host hydrates this field to an object containing download_url and file_id before the tool call reaches CodexPro."
+          ),'''
+          if old not in source:
+              raise SystemExit('import_file schema snippet not found')
+          server.write_text(source.replace(old, new))
+
+          smoke = Path('scripts/import-smoke.mjs')
+          source = smoke.read_text()
+          old = '''      const fileParams = importTool._meta?.['openai/fileParams'] ?? importTool.annotations?._meta?.['openai/fileParams'];
+          const metaFileParams = importTool._meta?.['openai/fileParams'];
+          // MCP SDK may nest meta differently; accept descriptor presence via tools/list raw shape.
+          const listedMeta = importTool._meta || {};
+          if (!Array.isArray(listedMeta['openai/fileParams']) || !listedMeta['openai/fileParams'].includes('file')) {
+            // Some SDK versions expose _meta only after unwrap; still require the tool schema file object.
+            const props = importTool.inputSchema?.properties?.file?.properties;
+            if (!props?.download_url || !props?.file_id) {
+              throw new Error(`import_file missing fileParams/schema: ${JSON.stringify(importTool)}`);
+            }
+          }'''
+          new = '''      const listedMeta = importTool._meta || {};
+          if (!Array.isArray(listedMeta['openai/fileParams']) || !listedMeta['openai/fileParams'].includes('file')) {
+            throw new Error(`import_file missing openai/fileParams metadata: ${JSON.stringify(importTool)}`);
+          }
+          const fileSchema = importTool.inputSchema?.properties?.file;
+          if (!fileSchema) {
+            throw new Error(`import_file missing file schema: ${JSON.stringify(importTool)}`);
+          }
+          // Apps SDK file params are host-hydrated. Keep this schema permissive so ChatGPT
+          // can substitute the platform file object instead of coercing it to a string.
+          if (fileSchema.type === 'string') {
+            throw new Error(`import_file file schema must not be string: ${JSON.stringify(fileSchema)}`);
+          }'''
+          if old not in source:
+              raise SystemExit('import smoke descriptor snippet not found')
+          smoke.write_text(source.replace(old, new))
+
+      - run: npm ci
+      - run: npm run build
+      - run: node scripts/import-smoke.mjs
+
+      - name: Commit verified fix and remove temporary workflow
+        shell: bash
+        run: |
+          rm .github/workflows/apply-file-param-fix.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/server.ts scripts/import-smoke.mjs .github/workflows/apply-file-param-fix.yml
+          git commit -m "fix: allow Apps SDK file object hydration"
+          git push origin HEAD:fix/apps-sdk-file-param
