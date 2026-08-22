@@ -241,16 +241,18 @@ try {
       const tools = await client.request('tools/list', {});
       const importTool = tools.tools.find((tool) => tool.name === 'import_file');
       if (!importTool) throw new Error('import_file tool missing');
-      const fileParams = importTool._meta?.['openai/fileParams'] ?? importTool.annotations?._meta?.['openai/fileParams'];
-      const metaFileParams = importTool._meta?.['openai/fileParams'];
-      // MCP SDK may nest meta differently; accept descriptor presence via tools/list raw shape.
       const listedMeta = importTool._meta || {};
       if (!Array.isArray(listedMeta['openai/fileParams']) || !listedMeta['openai/fileParams'].includes('file')) {
-        // Some SDK versions expose _meta only after unwrap; still require the tool schema file object.
-        const props = importTool.inputSchema?.properties?.file?.properties;
-        if (!props?.download_url || !props?.file_id) {
-          throw new Error(`import_file missing fileParams/schema: ${JSON.stringify(importTool)}`);
-        }
+        throw new Error(`import_file missing openai/fileParams metadata: ${JSON.stringify(importTool)}`);
+      }
+      const fileSchema = importTool.inputSchema?.properties?.file;
+      if (!fileSchema) {
+        throw new Error(`import_file missing file schema: ${JSON.stringify(importTool)}`);
+      }
+      // Apps SDK file params are host-hydrated. Keep this schema permissive so ChatGPT
+      // can substitute the platform file object instead of coercing it to a string.
+      if (fileSchema.type === 'string') {
+        throw new Error(`import_file file schema must not be string: ${JSON.stringify(fileSchema)}`);
       }
       const opened = await client.request('tools/call', {
         name: 'open_current_workspace',
